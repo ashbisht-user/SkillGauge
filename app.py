@@ -1,17 +1,18 @@
 import streamlit as st
 import json
-from pathlib import Path
 
 st.set_page_config(
     page_title="Learning Progress Tracker",
-    page_icon="📚",
+    page_icon="📊",
     layout="wide"
 )
 
 def load_roadmap_data(file_path="attached_assets/Untitled_1761631078778.json"):
     """
     Load career roadmap data from JSON file.
-    This function can be easily modified to load from different sources (CSV, API, database).
+    
+    INTEGRATION NOTE: In the integrated version, this will be replaced by
+    data passed from the roadmap page via set_tracker_data() function.
     
     Args:
         file_path: Path to the JSON file containing career roadmaps
@@ -34,16 +35,70 @@ def load_roadmap_data(file_path="attached_assets/Untitled_1761631078778.json"):
 def initialize_session_state():
     """
     Initialize session state variables for tracking progress.
-    Session state persists data across reruns during the same browser session.
+    
+    Session state structure:
+    - progress_data: Dict mapping task keys to status
+    - tracker_career: Career set by roadmap page (or None for standalone)
+    - tracker_level: Level set by roadmap page (or None for standalone)
+    - tracker_tasks: Tasks set by roadmap page (or None for standalone)
+    - standalone_mode: Boolean indicating if running in standalone mode
     """
     if 'progress_data' not in st.session_state:
         st.session_state.progress_data = {}
     
-    if 'selected_career' not in st.session_state:
-        st.session_state.selected_career = None
+    if 'tracker_career' not in st.session_state:
+        st.session_state.tracker_career = None
     
-    if 'selected_level' not in st.session_state:
-        st.session_state.selected_level = "Beginner"
+    if 'tracker_level' not in st.session_state:
+        st.session_state.tracker_level = None
+    
+    if 'tracker_tasks' not in st.session_state:
+        st.session_state.tracker_tasks = None
+    
+    if 'standalone_mode' not in st.session_state:
+        st.session_state.standalone_mode = True
+
+
+def set_tracker_data(career, level, tasks):
+    """
+    PUBLIC API: Set the career, level, and tasks for the tracker.
+    
+    This function is called by the roadmap page to configure the tracker
+    with the selected career path, level, and corresponding tasks.
+    
+    Args:
+        career: String - Career name (e.g., "Data Scientist")
+        level: String - Learning level ("Beginner", "Intermediate", or "Advanced")
+        tasks: List[str] - List of task descriptions for this career/level
+    
+    Example usage from roadmap page:
+        import streamlit as st
+        from app import set_tracker_data
+        
+        set_tracker_data(
+            career="Data Scientist",
+            level="Beginner",
+            tasks=["Learn Python basics", "Study statistics", ...]
+        )
+    """
+    st.session_state.tracker_career = career
+    st.session_state.tracker_level = level
+    st.session_state.tracker_tasks = tasks
+    st.session_state.standalone_mode = False
+
+
+def get_tracker_data():
+    """
+    Get the current tracker configuration.
+    
+    Returns:
+        Tuple of (career, level, tasks) or (None, None, None) if not configured
+    """
+    return (
+        st.session_state.tracker_career,
+        st.session_state.tracker_level,
+        st.session_state.tracker_tasks
+    )
 
 
 def get_task_key(career, level, task_index):
@@ -85,7 +140,7 @@ def update_task_status(career, level, task_index, status):
         career: Career name
         level: Learning level
         task_index: Index of the task
-        status: New status to set
+        status: New status to set ("Not Started", "In Progress", or "Completed")
     """
     task_key = get_task_key(career, level, task_index)
     st.session_state.progress_data[task_key] = status
@@ -101,10 +156,10 @@ def calculate_progress(career, level, tasks):
         tasks: List of tasks for this level
     
     Returns:
-        Tuple of (completed_count, total_count, percentage)
+        Tuple of (completed_count, in_progress_count, total_count, percentage)
     """
     if not tasks:
-        return 0, 0, 0
+        return 0, 0, 0, 0
     
     total_tasks = len(tasks)
     completed_tasks = sum(
@@ -112,9 +167,14 @@ def calculate_progress(career, level, tasks):
         if get_task_status(career, level, i) == "Completed"
     )
     
+    in_progress_tasks = sum(
+        1 for i in range(total_tasks)
+        if get_task_status(career, level, i) == "In Progress"
+    )
+    
     percentage = (completed_tasks / total_tasks) * 100 if total_tasks > 0 else 0
     
-    return completed_tasks, total_tasks, percentage
+    return completed_tasks, in_progress_tasks, total_tasks, percentage
 
 
 def get_status_color(status):
@@ -125,7 +185,7 @@ def get_status_color(status):
         status: Task status string
     
     Returns:
-        Color name for the status
+        Color hex code for the status
     """
     colors = {
         "Not Started": "#E8E8E8",
@@ -135,227 +195,297 @@ def get_status_color(status):
     return colors.get(status, "#E8E8E8")
 
 
-def display_header():
-    """Display the app header with title and description."""
-    st.title("📚 Learning Progress Tracker")
-    st.markdown("""
-    Track your learning journey across different career paths and skill levels.
-    Select your career, choose your level, and manage your progress through each task.
-    """)
-    st.divider()
-
-
-def display_career_selector(roadmap_data):
+def get_status_emoji(status):
     """
-    Display career selection dropdown.
+    Return emoji for different status types.
+    
+    Args:
+        status: Task status string
+    
+    Returns:
+        Emoji string for the status
+    """
+    emojis = {
+        "Not Started": "⚪",
+        "In Progress": "🟡",
+        "Completed": "✅"
+    }
+    return emojis.get(status, "⚪")
+
+
+def render_standalone_selector(roadmap_data):
+    """
+    STANDALONE MODE ONLY: Render sidebar selectors for testing.
+    
+    This function is only used when the tracker runs in standalone mode.
+    In integrated mode (when data is set via set_tracker_data()), 
+    this function is not called.
     
     Args:
         roadmap_data: List of career dictionaries
     
     Returns:
-        Selected career dictionary or None
+        Tuple of (career_name, level, tasks) or (None, None, None)
     """
-    if not roadmap_data:
-        st.warning("No career data available. Please check your data source.")
-        return None
-    
-    career_names = [career['career'] for career in roadmap_data]
-    
-    selected_career_name = st.selectbox(
-        "🎯 Select Your Career Path",
-        options=career_names,
-        help="Choose the career path you want to track"
-    )
-    
-    selected_career = next(
-        (career for career in roadmap_data if career['career'] == selected_career_name),
-        None
-    )
-    
-    if selected_career:
-        st.session_state.selected_career = selected_career_name
+    with st.sidebar:
+        st.markdown("### ⚙️ Standalone Mode")
+        st.caption("⚠️ This sidebar is for testing only. It will not appear when integrated with the roadmap page.")
         
-        with st.expander("📋 Career Details"):
-            st.markdown(f"**Required Skills:** {', '.join(selected_career['required_skills'])}")
-            st.markdown(f"**Interest Tags:** {', '.join(selected_career['interest_tags'])}")
-    
-    return selected_career
+        if not roadmap_data:
+            st.error("No career data available")
+            return None, None, None
+        
+        career_names = [career['career'] for career in roadmap_data]
+        
+        selected_career_name = st.selectbox(
+            "Career Path",
+            options=career_names,
+            key="standalone_career"
+        )
+        
+        selected_level = st.selectbox(
+            "Learning Level",
+            options=["Beginner", "Intermediate", "Advanced"],
+            key="standalone_level"
+        )
+        
+        selected_career = next(
+            (career for career in roadmap_data if career['career'] == selected_career_name),
+            None
+        )
+        
+        if selected_career:
+            tasks = selected_career['roadmap'].get(selected_level, [])
+            return selected_career_name, selected_level, tasks
+        
+        return None, None, None
 
 
-def display_level_selector():
+def display_progress_overview(career, level, tasks):
     """
-    Display level selection with tabs.
-    
-    Returns:
-        Selected level string
-    """
-    levels = ["Beginner", "Intermediate", "Advanced"]
-    
-    st.markdown("### 📊 Select Your Learning Level")
-    
-    cols = st.columns(3)
-    
-    for idx, level in enumerate(levels):
-        with cols[idx]:
-            if st.button(
-                level,
-                key=f"level_{level}",
-                use_container_width=True,
-                type="primary" if st.session_state.selected_level == level else "secondary"
-            ):
-                st.session_state.selected_level = level
-                st.rerun()
-    
-    return st.session_state.selected_level
-
-
-def display_progress_bar(career, level, tasks):
-    """
-    Display visual progress bar and statistics.
+    Display overall progress statistics and visual progress bar.
     
     Args:
         career: Career name
         level: Learning level
         tasks: List of tasks
     """
-    completed, total, percentage = calculate_progress(career, level, tasks)
+    completed, in_progress, total, percentage = calculate_progress(career, level, tasks)
     
-    st.markdown(f"### 🎯 {level} Level Progress")
-    
-    col1, col2, col3 = st.columns([2, 1, 1])
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.progress(percentage / 100)
+        st.metric(
+            label="📊 Total Tasks",
+            value=total
+        )
     
     with col2:
-        st.metric("Completed", f"{completed}/{total}")
+        st.metric(
+            label="✅ Completed",
+            value=completed,
+            delta=f"{percentage:.0f}%"
+        )
     
     with col3:
-        st.metric("Progress", f"{percentage:.0f}%")
+        st.metric(
+            label="🟡 In Progress",
+            value=in_progress
+        )
+    
+    with col4:
+        st.metric(
+            label="⚪ Not Started",
+            value=total - completed - in_progress
+        )
+    
+    st.markdown("### Progress Overview")
+    st.progress(percentage / 100, text=f"{percentage:.1f}% Complete")
     
     st.divider()
 
 
-def display_tasks(career, level, tasks):
+def on_status_change_callback(career, level, idx):
     """
-    Display tasks with status tracking for the selected level.
+    Callback function for status selectbox changes.
+    This ensures the status update happens before the rerun.
     
     Args:
         career: Career name
         level: Learning level
-        tasks: List of tasks to display
+        idx: Task index
+    """
+    key = f"status_{career}_{level}_{idx}"
+    new_status = st.session_state[key]
+    update_task_status(career, level, idx, new_status)
+
+
+def display_task_list(career, level, tasks):
+    """
+    Display the main task tracking interface.
+    Shows all tasks with their current status and allows status updates.
+    
+    Args:
+        career: Career name
+        level: Learning level
+        tasks: List of tasks to display and track
     """
     if not tasks:
         st.info(f"No tasks available for {level} level.")
         return
     
-    st.markdown("### ✅ Tasks")
+    st.markdown("### 📋 Task Progress")
     
     for idx, task in enumerate(tasks):
         current_status = get_task_status(career, level, idx)
         status_color = get_status_color(current_status)
+        status_emoji = get_status_emoji(current_status)
         
         with st.container():
-            col1, col2 = st.columns([3, 1])
+            col1, col2 = st.columns([4, 1])
             
             with col1:
                 st.markdown(
                     f"""
                     <div style="
-                        padding: 15px;
-                        border-left: 4px solid {status_color};
+                        padding: 18px;
+                        border-left: 5px solid {status_color};
                         background-color: #f8f9fa;
-                        border-radius: 5px;
-                        margin-bottom: 10px;
+                        border-radius: 8px;
+                        margin-bottom: 12px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
                     ">
-                        <strong>Task {idx + 1}:</strong> {task}
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span style="font-size: 20px;">{status_emoji}</span>
+                            <div>
+                                <span style="color: #666; font-size: 14px;">Task {idx + 1}</span>
+                                <p style="margin: 5px 0 0 0; font-size: 16px; color: #333;">{task}</p>
+                            </div>
+                        </div>
                     </div>
                     """,
                     unsafe_allow_html=True
                 )
             
             with col2:
-                new_status = st.selectbox(
+                st.selectbox(
                     "Status",
                     options=["Not Started", "In Progress", "Completed"],
                     index=["Not Started", "In Progress", "Completed"].index(current_status),
                     key=f"status_{career}_{level}_{idx}",
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
+                    on_change=on_status_change_callback,
+                    args=(career, level, idx)
                 )
-                
-                if new_status != current_status:
-                    update_task_status(career, level, idx, new_status)
-                    st.rerun()
 
 
-def display_resources(resources):
+def display_status_legend():
     """
-    Display learning resources for the selected career.
+    Display a legend explaining the status indicators.
+    """
+    with st.expander("ℹ️ Status Guide"):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("""
+            **⚪ Not Started**  
+            Tasks you haven't begun yet
+            """)
+        
+        with col2:
+            st.markdown("""
+            **🟡 In Progress**  
+            Tasks you're currently working on
+            """)
+        
+        with col3:
+            st.markdown("""
+            **✅ Completed**  
+            Tasks you've finished
+            """)
+
+
+def render_tracker(career, level, tasks):
+    """
+    Render the complete tracker UI for given career, level, and tasks.
+    
+    This is the main rendering function that can be called from the roadmap page
+    or used in standalone mode.
     
     Args:
-        resources: List of resource strings
+        career: Career name
+        level: Learning level
+        tasks: List of tasks to track
     """
-    if resources:
-        with st.expander("📚 Recommended Resources"):
-            for resource in resources:
-                st.markdown(f"- {resource}")
-
-
-def display_footer():
-    """Display footer with helpful information."""
+    if not career or not level or not tasks:
+        st.info("👈 No tracking data available. Please configure the tracker from the roadmap page.")
+        return
+    
+    st.markdown(f"### {career} - {level} Level")
+    st.markdown("")
+    
+    display_progress_overview(career, level, tasks)
+    display_task_list(career, level, tasks)
+    
     st.divider()
-    st.markdown("""
-    <div style="text-align: center; color: #666; padding: 20px;">
-        <p><strong>💡 Tips:</strong></p>
-        <ul style="list-style: none; padding: 0;">
-            <li>✓ Update task status as you progress through your learning journey</li>
-            <li>✓ Your progress is saved during this session</li>
-            <li>✓ Use the status dropdown to mark tasks as "In Progress" or "Completed"</li>
-            <li>✓ Track your completion percentage at the top of each level</li>
-        </ul>
-    </div>
-    """, unsafe_allow_html=True)
+    display_status_legend()
 
 
 def main():
     """
-    Main application function.
-    This orchestrates all components of the Learning Progress Tracker.
+    Main application function for the Learning Progress Tracker.
+    
+    INTEGRATION CONTRACT:
+    ====================
+    
+    To integrate with the roadmap page, use the set_tracker_data() function:
+    
+    1. From the roadmap page, after user selects career and level:
+       
+       from app import set_tracker_data
+       
+       set_tracker_data(
+           career="Data Scientist",
+           level="Beginner",
+           tasks=["Task 1", "Task 2", ...]
+       )
+    
+    2. Then navigate to or embed this tracker page
+    
+    3. The tracker will automatically use the provided data and hide the sidebar
+    
+    STANDALONE MODE:
+    ================
+    
+    When running independently (no data provided via set_tracker_data()),
+    the tracker operates in standalone mode with a sidebar for testing.
+    This allows development and testing without the roadmap page.
     """
     initialize_session_state()
     
-    roadmap_data = load_roadmap_data()
+    st.title("📊 Learning Progress Tracker")
+    st.markdown("""
+    Track your progress through learning tasks. Update the status of each task as you 
+    work through your learning journey and visualize your overall progress.
+    """)
+    st.divider()
     
-    display_header()
+    career, level, tasks = get_tracker_data()
     
-    selected_career = display_career_selector(roadmap_data)
-    
-    if selected_career:
-        st.markdown("---")
+    if career and level and tasks:
+        render_tracker(career, level, tasks)
+    else:
+        roadmap_data = load_roadmap_data()
         
-        selected_level = display_level_selector()
-        
-        st.markdown("---")
-        
-        tasks = selected_career['roadmap'].get(selected_level, [])
-        
-        display_progress_bar(
-            selected_career['career'],
-            selected_level,
-            tasks
-        )
-        
-        display_tasks(
-            selected_career['career'],
-            selected_level,
-            tasks
-        )
-        
-        st.markdown("---")
-        
-        display_resources(selected_career.get('resources', []))
-        
-        display_footer()
+        if roadmap_data:
+            career, level, tasks = render_standalone_selector(roadmap_data)
+            
+            if career and level and tasks:
+                render_tracker(career, level, tasks)
+            else:
+                st.info("👈 Please select a career path and level from the sidebar to start tracking.")
+        else:
+            st.error("Unable to load roadmap data. Please check the data source configuration.")
 
 
 if __name__ == "__main__":
